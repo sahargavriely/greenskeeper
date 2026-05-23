@@ -1,0 +1,81 @@
+name: Daily empty commits
+
+on:
+  schedule:
+    - cron: "12 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  empty-commits:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create weighted random empty commits
+        shell: bash
+        env:
+          COMMIT_SIGNING_KEY: ${{ secrets.COMMIT_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${COMMIT_SIGNING_KEY}" ]]; then
+            echo "::error::Missing COMMIT_SIGNING_KEY repository secret."
+            exit 1
+          fi
+
+          signing_key_path="${RUNNER_TEMP}/commit_signing_key"
+          signing_key_error="${RUNNER_TEMP}/commit_signing_key_error"
+          umask 077
+          if [[ "${COMMIT_SIGNING_KEY}" == *"-----BEGIN "* ]]; then
+            printf '%b\n' "${COMMIT_SIGNING_KEY}" | tr -d '\r' > "${signing_key_path}"
+          elif ! printf '%s' "${COMMIT_SIGNING_KEY}" | tr -d '[:space:]' | base64 --decode > "${signing_key_path}" 2>"${signing_key_error}"; then
+            echo "::error::COMMIT_SIGNING_KEY must be a private SSH key, either raw multiline, with literal \\n characters, or base64-encoded."
+            exit 1
+          fi
+          chmod 600 "${signing_key_path}"
+          if ! ssh-keygen -y -f "${signing_key_path}" > "${signing_key_path}.pub" 2>"${signing_key_error}"; then
+            echo "::error::COMMIT_SIGNING_KEY is not a valid unencrypted SSH private key."
+            echo "::error::If the key has a passphrase, create a dedicated unencrypted signing key for this workflow."
+            sed 's/^/ssh-keygen: /' "${signing_key_error}"
+            exit 1
+          fi
+
+          git config user.name "sahargavriely"
+          git config user.email "gav6sa@gmail.com"
+          git config gpg.format ssh
+          git config user.signingkey "${signing_key_path}"
+          git config commit.gpgsign true
+
+          messages=(
+            "chore: keep the lights on"
+            "chore: tend the garden"
+            "chore: daily pulse"
+            "chore: small steps"
+            "chore: steady rhythm"
+            "chore: routine maintenance"
+            "chore: daily heartbeat"
+            "chore: quiet update"
+          )
+
+          roll=$((RANDOM % 10))
+          if (( roll < 5 )); then
+            commit_count=3
+          elif (( roll < 8 )); then
+            commit_count=2
+          else
+            commit_count=1
+          fi
+
+          echo "Creating ${commit_count} empty commit(s)."
+
+          for ((i = 1; i <= commit_count; i++)); do
+            message="${messages[RANDOM % ${#messages[@]}]}"
+            git commit --allow-empty -m "${message}"
+          done
+
+          git push origin "HEAD:${GITHUB_REF_NAME}"
